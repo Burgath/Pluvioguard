@@ -1,0 +1,41 @@
+name: Baixar bairros (OpenStreetMap)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 4 1 * *"
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: bairros
+  cancel-in-progress: false
+
+jobs:
+  bairros:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Testar conversor
+        run: node scripts/testar-bairros.mjs
+      - name: Baixar bairros dos 1.188 municipios (retoma de onde parou)
+        env:
+          MAX_MINUTOS: "320"
+          FORCAR: ${{ github.event_name == 'schedule' && '1' || '' }}
+        run: node scripts/baixar-bairros.mjs data/bairros
+      - name: Guardar no repositorio
+        run: |
+          git config user.name "pluvioguard-bot"
+          git config user.email "pluvioguard-bot@users.noreply.github.com"
+          git add data/bairros
+          if git diff --cached --quiet; then echo "Nada novo."; else git commit -m "Atualiza bairros"; git push; fi
+      - name: Republicar o site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run atualizar.yml
