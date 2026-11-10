@@ -1,0 +1,46 @@
+name: Bairros por regiao (Geofabrik)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: bairros
+  cancel-in-progress: false
+
+jobs:
+  regiao:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Instalar osmium
+        run: sudo apt-get update && sudo apt-get install -y osmium-tool
+      - name: Baixar mapa da regiao Sul (Geofabrik)
+        run: |
+          curl -fL --retry 5 --retry-delay 20 -o sul.osm.pbf https://download.geofabrik.de/south-america/brazil/sul-latest.osm.pbf
+          ls -lh sul.osm.pbf
+      - name: Extrair limites e bairros
+        run: |
+          osmium tags-filter sul.osm.pbf r/boundary=administrative r/place=suburb,neighbourhood,quarter -o filtrado.osm.pbf --overwrite
+          osmium export filtrado.osm.pbf -f geojsonseq --geometry-types=polygon -o limites.geojsonseq --overwrite
+          ls -lh limites.geojsonseq
+      - name: Gerar arquivos de bairros
+        run: node --max-old-space-size=6144 scripts/bairros-regiao.mjs limites.geojsonseq data/bairros
+      - name: Salvar
+        run: |
+          git config user.name "pluvioguard-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add data/bairros
+          if git diff --cached --quiet; then echo "Nada novo."; else git commit -m "Bairros por regiao (Geofabrik)"; fi
+          for i in 1 2 3 4 5; do git pull --rebase origin main && git push && break || sleep 15; done
+      - name: Publicar site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run atualizar.yml
