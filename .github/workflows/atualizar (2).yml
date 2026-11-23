@@ -1,0 +1,68 @@
+name: Atualizar dados e publicar
+
+on:
+  schedule:
+    - cron: "23 * * * *"   # tenta TODA hora, às :23 (o GitHub às vezes pula execuções agendadas); só atualiza se os dados no ar tiverem mais de 2h30
+  workflow_dispatch:         # botão "Run workflow" para atualizar na hora
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy2.outputs.page_url || steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Checar se os dados no ar já estão frescos
+        id: fresco
+        run: |
+          pular=false
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            pular=$(node -e '
+              fetch("https://burgath.github.io/Pluvioguard/data/weather.json?x="+Date.now())
+                .then(r=>r.json())
+                .then(j=>{const min=(Date.now()-new Date(j.updated).getTime())/60000;console.log(min<150?"true":"false")})
+                .catch(()=>console.log("false"))
+            ' | tail -n 1)
+          fi
+          echo "pular=$pular" >> "$GITHUB_OUTPUT"
+          echo "pular atualização: $pular"
+      - name: Buscar chuva real (Open-Meteo)
+        if: steps.fresco.outputs.pular != 'true'
+        run: |
+          node scripts/testar.mjs
+          mkdir -p _site/data
+          node scripts/atualizar-dados.mjs _site/data/weather.json
+          cp index.html _site/index.html
+          if [ -f pro.html ]; then cp pro.html _site/pro.html; fi
+          if [ -d data/bairros ]; then cp -r data/bairros _site/data/bairros; fi
+      - uses: actions/configure-pages@v5
+        if: steps.fresco.outputs.pular != 'true'
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.fresco.outputs.pular != 'true'
+        with:
+          path: _site
+      - id: deploy
+        if: steps.fresco.outputs.pular != 'true'
+        continue-on-error: true   # falha passageira do GitHub ao achar o pacote; tentamos de novo abaixo
+        uses: actions/deploy-pages@v4
+      - name: Esperar e tentar publicar de novo
+        if: steps.fresco.outputs.pular != 'true' && steps.deploy.outcome == 'failure'
+        run: sleep 60
+      - id: deploy2
+        if: steps.fresco.outputs.pular != 'true' && steps.deploy.outcome == 'failure'
+        uses: actions/deploy-pages@v4
